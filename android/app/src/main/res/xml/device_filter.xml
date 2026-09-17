@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Saleae Logic clone / CWAV USBee AX: VID 0x0925 (2341), PID 0x3881 (14465) -->
+    <usb-device vendor-id="2341" product-id="14465" />
+    <!-- Cypress EZ-USB FX2 default: VID 0x04B4 (1204), PID 0x8613 (34323) -->
+    <usb-device vendor-id="1204" product-id="34323" />
+    <!-- Generic catch for any device under 0x0925 -->
+    <usb-device vendor-id="2341" />
+</resources>
