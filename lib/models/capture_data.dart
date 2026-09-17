@@ -26,6 +26,12 @@ class CaptureData {
     return (rawSamples[sampleIndex] >> channel) & 1;
   }
 
+  /// Returns the raw 8-bit sample byte at given sample index
+  int sampleAt(int sampleIndex) {
+    if (sampleIndex < 0 || sampleIndex >= rawSamples.length) return 0;
+    return rawSamples[sampleIndex];
+  }
+
   /// Format time in ns, µs, ms or s
   static String formatTime(double seconds) {
     if (seconds.abs() < 1e-6) {

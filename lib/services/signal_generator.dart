@@ -18,6 +18,12 @@ class SignalGenerator {
       case 'i2c':
         _generateI2cScenario(buffer, sampleRate, chunkLength, globalSampleOffset);
         break;
+      case 'spi':
+        _generateSpiScenario(buffer, sampleRate, chunkLength, globalSampleOffset);
+        break;
+      case 'pwm':
+        _generatePwmScenario(buffer, sampleRate, chunkLength, globalSampleOffset);
+        break;
       case 'motor':
         _generateMotorScenario(buffer, sampleRate, chunkLength, globalSampleOffset);
         break;
@@ -44,11 +50,11 @@ class SignalGenerator {
       final s = offset + i;
       int byte = 0;
 
-      // D0: Clock (100 kHz square wave -> period = sampleRate / 100000)
+      // D0: Clock (100 kHz square wave)
       final clkPeriod = math.max(2, sampleRate ~/ 100000);
       if ((s % clkPeriod) < (clkPeriod ~/ 2)) byte |= (1 << 0);
 
-      // D1: SPI MOSI (data changes every 4 clock periods)
+      // D1: SPI MOSI
       final spiDataBit = (s ~/ (clkPeriod * 2)) % 2;
       if (spiDataBit == 1) byte |= (1 << 1);
 
@@ -76,7 +82,6 @@ class SignalGenerator {
       // D5: UART TX (115200 baud)
       final uartBaudPeriod = math.max(1, sampleRate ~/ 115200);
       final uartBitIdx = (s ~/ uartBaudPeriod) % 10;
-      // Byte 0x53 ('S'): Start(0) + 1,1,0,0,1,0,1,0 + Stop(1)
       const uartPattern = [0, 1, 1, 0, 0, 1, 0, 1, 0, 1];
       if (uartPattern[uartBitIdx] == 1) byte |= (1 << 5);
 
@@ -95,8 +100,6 @@ class SignalGenerator {
     }
   }
 
-  /// UART Traffic scenario:
-  /// D0: TX (115200 baud sending "PULSEVIEW")
   /// UART Traffic scenario (115200 8N1):
   /// D0: TX (115200 baud sending AT commands & sensor data)
   /// D1: RX (115200 baud responses & telemetry)
@@ -104,7 +107,7 @@ class SignalGenerator {
   /// D3: CTS (Handshake - active low)
   /// D4: TX Activity LED (Active high during byte transmission)
   /// D5: Baud Rate Clock (115.2 kHz reference square wave)
-  /// D6: Framing Error Injection (Every 200ms a test packet with bad stop bit)
+  /// D6: Framing Error Injection
   /// D7: Heartbeat pulse (1 Hz)
   static void _generateUartScenario(Uint8List buffer, int sampleRate, int length, int offset) {
     final double baudSamples = sampleRate / 115200.0;
@@ -181,48 +184,172 @@ class SignalGenerator {
     }
   }
 
-  /// I2C Sensor scenario:
-  /// D0: SCL (100 kHz)
-  /// D1: SDA (Start, 0x48 Write, ACK, 0x00, ACK, Repeated Start, 0x49 Read, ACK, Data MSB, ACK, Data LSB, NACK, Stop)
-  /// D2: Sensor INT# (Data Ready interrupt)
+  /// I2C Sensor Scenario:
+  /// D0: SCL (100 kHz I2C Clock)
+  /// D1: SDA (Start, Addr 0x48 W, ACK, Reg 0x01, ACK, Data 0xA5, ACK, Stop)
+  /// D2: Sensor INT# (Data ready interrupt line, active low)
+  /// D7: Heartbeat (1 Hz)
   static void _generateI2cScenario(Uint8List buffer, int sampleRate, int length, int offset) {
-    final sclPeriod = math.max(4, sampleRate ~/ 100000);
-    final frameLen = sclPeriod * 50;
+    final sclHalfPeriod = math.max(2, sampleRate ~/ 200000); // 100 kHz clock -> period = 10 samples at 1 MHz
+    final sclPeriod = sclHalfPeriod * 2;
+
+    // Total bits per transaction:
+    // 4 idle + 1 Start + 9 (Addr 0x48 W + ACK) + 9 (Reg 0x01 + ACK) + 9 (Data 0xA5 + ACK) + 1 Stop + 10 idle = 43 bits
+    const sdaBits = [
+      // Idle high
+      1, 1, 1, 1,
+      // Start condition (special handling: drops while SCL is high)
+      0,
+      // Byte 1: Addr 0x48 (0b1001000) + W (0) + ACK (0)
+      1, 0, 0, 1, 0, 0, 0, 0, 0,
+      // Byte 2: Reg 0x01 (0b00000001) + ACK (0)
+      0, 0, 0, 0, 0, 0, 0, 1, 0,
+      // Byte 3: Data 0xA5 (0b10100101) + ACK (0)
+      1, 0, 1, 0, 0, 1, 0, 1, 0,
+      // Stop condition (rises while SCL is high)
+      1,
+      // Idle
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+    ];
+
+    final frameLen = sdaBits.length * sclPeriod;
 
     for (int i = 0; i < length; i++) {
       final s = offset + i;
       final f = s % frameLen;
-      int byte = (1 << 0) | (1 << 1) | (1 << 2); // Default idle high
+      final bitIdx = f ~/ sclPeriod;
+      final phase = f % sclPeriod;
 
-      // D2: Sensor INT# pulls low every frame before read
-      if (f < sclPeriod * 4) {
-        byte &= ~(1 << 2);
+      int scl = 1;
+      int sda = 1;
+      int intPin = 1;
+
+      // SCL toggles only during active transmission (bits 5 to 32)
+      if (bitIdx >= 5 && bitIdx <= 31) {
+        scl = (phase < sclHalfPeriod) ? 0 : 1;
+      } else {
+        scl = 1; // Idle high
       }
 
-      // SCL toggles between f = 6*sclPeriod and 40*sclPeriod
-      if (f >= sclPeriod * 6 && f < sclPeriod * 42) {
-        final bitPos = (f - sclPeriod * 6) % sclPeriod;
-        if (bitPos >= (sclPeriod ~/ 2)) {
-          byte &= ~(1 << 0); // SCL low in second half
+      // SDA generation
+      if (bitIdx == 4) {
+        // Start condition: SDA drops while SCL is high
+        sda = (phase < sclHalfPeriod) ? 1 : 0;
+      } else if (bitIdx == 32) {
+        // Stop condition: SDA rises while SCL is high
+        sda = (phase < sclHalfPeriod) ? 0 : 1;
+      } else if (bitIdx < sdaBits.length) {
+        sda = sdaBits[bitIdx];
+      }
+
+      // Sensor INT# line: pulses low before transaction
+      if (bitIdx < 3) {
+        intPin = 0;
+      }
+
+      int byteVal = 0;
+      if (scl == 1) byteVal |= (1 << 0); // D0: SCL
+      if (sda == 1) byteVal |= (1 << 1); // D1: SDA
+      if (intPin == 1) byteVal |= (1 << 2); // D2: INT#
+
+      // D7: Heartbeat
+      if ((s % sampleRate) < (sampleRate ~/ 25)) byteVal |= (1 << 7);
+
+      buffer[i] = byteVal;
+    }
+  }
+
+  /// SPI Bus Scenario:
+  /// D0: SCLK (200 kHz, Mode 0)
+  /// D1: MOSI (Master Out: 0x9F JEDEC ID Command, 0x00, 0x00, 0x00)
+  /// D2: MISO (Slave In: 0x00, 0xEF Manufacturer, 0x40 Type, 0x15 Capacity)
+  /// D3: CS# (Active-Low Chip Select)
+  /// D7: Heartbeat
+  static void _generateSpiScenario(Uint8List buffer, int sampleRate, int length, int offset) {
+    final sclkHalf = math.max(2, sampleRate ~/ 400000); // 200 kHz clock
+    final sclkPeriod = sclkHalf * 2;
+
+    // 4 bytes: 32 clock cycles
+    const mosiBytes = [0x9F, 0x00, 0x00, 0x00];
+    const misoBytes = [0x00, 0xEF, 0x40, 0x15];
+
+    // Frame: 8 idle + 32 clocks + 8 idle = 48 clock periods
+    final frameClocks = 48;
+    final frameLen = frameClocks * sclkPeriod;
+
+    for (int i = 0; i < length; i++) {
+      final s = offset + i;
+      final f = s % frameLen;
+      final clockIdx = f ~/ sclkPeriod;
+      final phase = f % sclkPeriod;
+
+      int sclk = 0;
+      int mosi = 0;
+      int miso = 0;
+      int cs = 1; // Default idle high
+
+      // Active CS# region (clocks 8 to 40)
+      if (clockIdx >= 8 && clockIdx < 40) {
+        cs = 0; // Active low
+
+        // SCLK Mode 0: idle low, pulse high in second half
+        sclk = (phase >= sclkHalf) ? 1 : 0;
+
+        final activeBitIdx = clockIdx - 8;
+        final byteIdx = activeBitIdx ~/ 8;
+        final bitInByte = 7 - (activeBitIdx % 8); // MSB first
+
+        if (byteIdx < mosiBytes.length) {
+          mosi = (mosiBytes[byteIdx] >> bitInByte) & 1;
+          miso = (misoBytes[byteIdx] >> bitInByte) & 1;
         }
       }
 
-      // SDA start condition (drops while SCL is high)
-      if (f >= sclPeriod * 4 && f < sclPeriod * 5) {
-        byte &= ~(1 << 1); // Start condition
-      }
+      int byteVal = 0;
+      if (sclk == 1) byteVal |= (1 << 0); // D0: SCLK
+      if (mosi == 1) byteVal |= (1 << 1); // D1: MOSI
+      if (miso == 1) byteVal |= (1 << 2); // D2: MISO
+      if (cs == 1) byteVal |= (1 << 3);   // D3: CS#
+      if ((s % sampleRate) < (sampleRate ~/ 25)) byteVal |= (1 << 7); // D7: Heartbeat
 
-      // SDA data pattern
-      if (f >= sclPeriod * 6 && f < sclPeriod * 36) {
-        final bitIndex = (f - sclPeriod * 6) ~/ sclPeriod;
-        // Address 0x48 (0b10010000)
-        const addrBits = [1, 0, 0, 1, 0, 0, 0, 0, 0 /* ACK */];
-        if (bitIndex < addrBits.length) {
-          if (addrBits[bitIndex] == 0) byte &= ~(1 << 1);
-        }
-      }
+      buffer[i] = byteVal;
+    }
+  }
 
-      buffer[i] = byte;
+  /// PWM Multi-Frequency & Duty Cycle Scenario:
+  /// D0: 20 kHz Motor PWM (75% Duty Cycle)
+  /// D1: 1 kHz PWM with 2 Hz Sine-Swept Duty Cycle (10% to 90%)
+  /// D2: 50 kHz High-Speed SMPS PWM (50% Duty Cycle)
+  /// D3: 100 Hz Servo Pulse (1.5 ms Center)
+  /// D7: 1 Hz Heartbeat
+  static void _generatePwmScenario(Uint8List buffer, int sampleRate, int length, int offset) {
+    final p20k = math.max(4, sampleRate ~/ 20000);
+    final p1k = math.max(4, sampleRate ~/ 1000);
+    final p50k = math.max(2, sampleRate ~/ 50000);
+    final p100 = math.max(10, sampleRate ~/ 100);
+    final servoCenterSamples = (sampleRate * 0.0015).toInt(); // 1.5 ms
+
+    for (int i = 0; i < length; i++) {
+      final s = offset + i;
+      int byteVal = 0;
+
+      // D0: 20 kHz 75% duty
+      if ((s % p20k) < (p20k * 0.75)) byteVal |= (1 << 0);
+
+      // D1: 1 kHz Sine-modulated duty cycle
+      final mod = 0.5 + 0.4 * math.sin((s / sampleRate) * 2 * math.pi * 2.0);
+      if ((s % p1k) < (p1k * mod)) byteVal |= (1 << 1);
+
+      // D2: 50 kHz 50% duty
+      if ((s % p50k) < (p50k * 0.50)) byteVal |= (1 << 2);
+
+      // D3: 100 Hz servo (1.5ms pulse)
+      if ((s % p100) < servoCenterSamples) byteVal |= (1 << 3);
+
+      // D7: Heartbeat
+      if ((s % sampleRate) < (sampleRate ~/ 25)) byteVal |= (1 << 7);
+
+      buffer[i] = byteVal;
     }
   }
 
@@ -261,3 +388,4 @@ class SignalGenerator {
     }
   }
 }
+

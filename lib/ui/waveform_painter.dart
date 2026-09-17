@@ -2,6 +2,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/capture_data.dart';
 import '../models/uart_packet.dart';
+import '../models/i2c_packet.dart';
+import '../models/spi_packet.dart';
+import '../models/pwm_measurement.dart';
 
 class WaveformPainter extends CustomPainter {
   final CaptureData capture;
@@ -15,6 +18,12 @@ class WaveformPainter extends CustomPainter {
   final Set<int> activeChannels;  // enabled channels (0..7)
   final UartConfig? uartConfig;   // UART protocol decoder configuration
   final List<UartPacket>? uartPackets; // Decoded UART packets
+  final I2cConfig? i2cConfig;     // I2C protocol decoder configuration
+  final List<I2cPacket>? i2cPackets;   // Decoded I2C packets
+  final SpiConfig? spiConfig;     // SPI protocol decoder configuration
+  final List<SpiPacket>? spiPackets;   // Decoded SPI packets
+  final PwmConfig? pwmConfig;     // PWM measurement configuration
+  final PwmMeasurement? pwmMeasurement; // Calculated PWM metrics
 
   static const List<Color> channelColors = [
     Color(0xFF00E676), // D0: Bright Green
@@ -43,8 +52,15 @@ class WaveformPainter extends CustomPainter {
     this.triggerColor,
     this.uartConfig,
     this.uartPackets,
+    this.i2cConfig,
+    this.i2cPackets,
+    this.spiConfig,
+    this.spiPackets,
+    this.pwmConfig,
+    this.pwmMeasurement,
     Set<int>? activeChannels,
   }) : activeChannels = activeChannels ?? {0, 1, 2, 3, 4, 5, 6, 7};
+
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -85,6 +101,41 @@ class WaveformPainter extends CustomPainter {
       canvas.drawLine(Offset(labelWidth, trackY), Offset(labelWidth, trackY + channelHeight), gridPaint);
 
       final isUartChannel = (uartConfig != null && uartConfig!.enabled && uartConfig!.channel == ch);
+      final isI2cScl = (i2cConfig != null && i2cConfig!.enabled && i2cConfig!.sclChannel == ch);
+      final isI2cSda = (i2cConfig != null && i2cConfig!.enabled && i2cConfig!.sdaChannel == ch);
+      final isSpiSclk = (spiConfig != null && spiConfig!.enabled && spiConfig!.sclkChannel == ch);
+      final isSpiMosi = (spiConfig != null && spiConfig!.enabled && spiConfig!.mosiChannel == ch);
+      final isSpiMiso = (spiConfig != null && spiConfig!.enabled && spiConfig!.misoChannel == ch);
+      final isSpiCs = (spiConfig != null && spiConfig!.enabled && spiConfig!.csChannel == ch);
+      final isPwmChannel = (pwmConfig != null && pwmConfig!.enabled && pwmConfig!.channel == ch);
+
+      String? protocolTag;
+      Color protocolTagColor = const Color(0xFF00E5FF);
+      if (isUartChannel) {
+        protocolTag = 'UART';
+        protocolTagColor = const Color(0xFF00E5FF);
+      } else if (isI2cScl) {
+        protocolTag = 'I2C CLK';
+        protocolTagColor = const Color(0xFFFFD600);
+      } else if (isI2cSda) {
+        protocolTag = 'I2C DAT';
+        protocolTagColor = const Color(0xFFFFD600);
+      } else if (isSpiSclk) {
+        protocolTag = 'SPI CLK';
+        protocolTagColor = const Color(0xFFE040FB);
+      } else if (isSpiMosi) {
+        protocolTag = 'SPI MOSI';
+        protocolTagColor = const Color(0xFFE040FB);
+      } else if (isSpiMiso) {
+        protocolTag = 'SPI MISO';
+        protocolTagColor = const Color(0xFFE040FB);
+      } else if (isSpiCs) {
+        protocolTag = 'SPI CS#';
+        protocolTagColor = const Color(0xFFE040FB);
+      } else if (isPwmChannel) {
+        protocolTag = 'PWM';
+        protocolTagColor = const Color(0xFFAEEA00);
+      }
 
       // Label text
       final textPainter = TextPainter(
@@ -99,20 +150,20 @@ class WaveformPainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout();
 
-      if (isUartChannel) {
+      if (protocolTag != null) {
         textPainter.paint(canvas, Offset(8, trackY + 5));
-        final uartTag = TextPainter(
-          text: const TextSpan(
-            text: 'UART',
+        final tagPainter = TextPainter(
+          text: TextSpan(
+            text: protocolTag,
             style: TextStyle(
-              color: Color(0xFF00E5FF),
-              fontSize: 8.5,
+              color: protocolTagColor,
+              fontSize: 7.5,
               fontWeight: FontWeight.bold,
             ),
           ),
           textDirection: TextDirection.ltr,
         )..layout();
-        uartTag.paint(canvas, Offset(8, trackY + 23));
+        tagPainter.paint(canvas, Offset(6, trackY + 24));
       } else {
         textPainter.paint(canvas, Offset(12, trackY + (channelHeight - textPainter.height) / 2));
       }
@@ -132,7 +183,7 @@ class WaveformPainter extends CustomPainter {
         color: channelColors[ch],
       );
 
-      // Protocol Decoder Track for UART
+      // Protocol Decoder Tracks
       if (isUartChannel) {
         _drawUartDecoderTrack(
           canvas: canvas,
@@ -140,7 +191,41 @@ class WaveformPainter extends CustomPainter {
           trackY: trackY,
           waveWidth: waveWidth,
         );
+      } else if (isI2cSda) {
+        _drawI2cDecoderTrack(
+          canvas: canvas,
+          channel: ch,
+          trackY: trackY,
+          waveWidth: waveWidth,
+        );
+      } else if (isSpiMosi) {
+        _drawSpiDecoderTrack(
+          canvas: canvas,
+          channel: ch,
+          trackY: trackY,
+          waveWidth: waveWidth,
+          isMosi: true,
+        );
+      } else if (isSpiMiso) {
+        _drawSpiDecoderTrack(
+          canvas: canvas,
+          channel: ch,
+          trackY: trackY,
+          waveWidth: waveWidth,
+          isMosi: false,
+        );
       }
+
+      // PWM Measurement Badge Overlay
+      if (isPwmChannel && pwmMeasurement != null && pwmMeasurement!.frequencyHz > 0) {
+        _drawPwmOverlay(
+          canvas: canvas,
+          channel: ch,
+          trackY: trackY,
+          waveWidth: waveWidth,
+        );
+      }
+
     }
     canvas.restore();
 
@@ -561,6 +646,195 @@ class WaveformPainter extends CustomPainter {
     }
   }
 
+  void _drawI2cDecoderTrack({
+    required Canvas canvas,
+    required int channel,
+    required double trackY,
+    required double waveWidth,
+  }) {
+    if (i2cPackets == null || i2cPackets!.isEmpty || i2cConfig == null) return;
+
+    final bubbleTop = trackY + 22.0;
+    const bubbleHeight = 16.0;
+    final bubbleBottom = bubbleTop + bubbleHeight;
+
+    for (final packet in i2cPackets!) {
+      final xStart = labelWidth + (packet.startSample - viewOffsetSamples) / samplesPerPixel;
+      final xEnd = labelWidth + (packet.endSample - viewOffsetSamples) / samplesPerPixel;
+
+      if (xEnd < labelWidth || xStart > labelWidth + waveWidth) continue;
+
+      final clampedXStart = math.max(labelWidth, xStart);
+      final clampedXEnd = math.min(labelWidth + waveWidth, xEnd);
+      final bubbleWidth = math.max(14.0, clampedXEnd - clampedXStart);
+
+      Color fillColor;
+      Color strokeColor;
+
+      switch (packet.type) {
+        case I2cPacketType.start:
+        case I2cPacketType.repeatedStart:
+          fillColor = const Color(0xFF00E676).withValues(alpha: 0.35);
+          strokeColor = const Color(0xFF00E676);
+          break;
+        case I2cPacketType.address:
+          fillColor = const Color(0xFFFFD600).withValues(alpha: 0.35);
+          strokeColor = const Color(0xFFFFD600);
+          break;
+        case I2cPacketType.data:
+          fillColor = const Color(0xFF00E5FF).withValues(alpha: 0.30);
+          strokeColor = const Color(0xFF00E5FF);
+          break;
+        case I2cPacketType.stop:
+          fillColor = Colors.redAccent.withValues(alpha: 0.40);
+          strokeColor = Colors.redAccent;
+          break;
+      }
+
+      final rrect = RRect.fromRectAndRadius(
+        Rect.fromLTRB(clampedXStart, bubbleTop, clampedXStart + bubbleWidth, bubbleBottom),
+        const Radius.circular(3),
+      );
+
+      canvas.drawRRect(rrect, Paint()..color = fillColor);
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = strokeColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
+
+      final label = bubbleWidth > 35.0 ? packet.bubbleLabel : packet.shortLabel;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(
+            color: strokeColor,
+            fontSize: 8.5,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: math.max(6, bubbleWidth - 2));
+
+      final textX = clampedXStart + (bubbleWidth - tp.width) / 2;
+      final textY = bubbleTop + (bubbleHeight - tp.height) / 2;
+      tp.paint(canvas, Offset(textX, textY));
+    }
+  }
+
+  void _drawSpiDecoderTrack({
+    required Canvas canvas,
+    required int channel,
+    required double trackY,
+    required double waveWidth,
+    required bool isMosi,
+  }) {
+    if (spiPackets == null || spiPackets!.isEmpty || spiConfig == null) return;
+
+    final bubbleTop = trackY + 22.0;
+    const bubbleHeight = 16.0;
+    final bubbleBottom = bubbleTop + bubbleHeight;
+
+    for (final packet in spiPackets!) {
+      final xStart = labelWidth + (packet.startSample - viewOffsetSamples) / samplesPerPixel;
+      final xEnd = labelWidth + (packet.endSample - viewOffsetSamples) / samplesPerPixel;
+
+      if (xEnd < labelWidth || xStart > labelWidth + waveWidth) continue;
+
+      final clampedXStart = math.max(labelWidth, xStart);
+      final clampedXEnd = math.min(labelWidth + waveWidth, xEnd);
+      final bubbleWidth = math.max(12.0, clampedXEnd - clampedXStart);
+
+      final strokeColor = isMosi ? const Color(0xFFE040FB) : const Color(0xFF1DE9B6);
+      final fillColor = strokeColor.withValues(alpha: 0.25);
+
+      final rrect = RRect.fromRectAndRadius(
+        Rect.fromLTRB(clampedXStart, bubbleTop, clampedXStart + bubbleWidth, bubbleBottom),
+        const Radius.circular(3),
+      );
+
+      canvas.drawRRect(rrect, Paint()..color = fillColor);
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = strokeColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
+
+      final label = bubbleWidth > 35.0
+          ? (isMosi ? packet.mosiBubbleLabel : packet.misoBubbleLabel)
+          : (isMosi ? packet.mosiHex : packet.misoHex);
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 8.5,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: math.max(6, bubbleWidth - 2));
+
+      final textX = clampedXStart + (bubbleWidth - tp.width) / 2;
+      final textY = bubbleTop + (bubbleHeight - tp.height) / 2;
+      tp.paint(canvas, Offset(textX, textY));
+    }
+  }
+
+  void _drawPwmOverlay({
+    required Canvas canvas,
+    required int channel,
+    required double trackY,
+    required double waveWidth,
+  }) {
+    if (pwmMeasurement == null) return;
+
+    final badgeText = '${pwmMeasurement!.frequencyFormatted}  |  ${pwmMeasurement!.dutyFormatted} D';
+    final tp = TextPainter(
+      text: TextSpan(
+        text: badgeText,
+        style: const TextStyle(
+          color: Color(0xFFAEEA00),
+          fontSize: 9.5,
+          fontWeight: FontWeight.bold,
+          fontFamily: 'monospace',
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final badgeWidth = tp.width + 12.0;
+    final badgeHeight = 16.0;
+    final badgeRight = labelWidth + waveWidth - 12.0;
+    final badgeLeft = badgeRight - badgeWidth;
+    final badgeTop = trackY + 4.0;
+
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(badgeLeft, badgeTop, badgeWidth, badgeHeight),
+      const Radius.circular(4),
+    );
+
+    canvas.drawRRect(rrect, Paint()..color = const Color(0xFF162214).withValues(alpha: 0.85));
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = const Color(0xFFAEEA00).withValues(alpha: 0.6)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0,
+    );
+
+    tp.paint(canvas, Offset(badgeLeft + 6.0, badgeTop + (badgeHeight - tp.height) / 2));
+  }
+
   @override
   bool shouldRepaint(covariant WaveformPainter oldDelegate) {
     return oldDelegate.capture != capture ||
@@ -572,6 +846,13 @@ class WaveformPainter extends CustomPainter {
         oldDelegate.triggerSample != triggerSample ||
         oldDelegate.triggerColor != triggerColor ||
         oldDelegate.uartConfig != uartConfig ||
-        oldDelegate.uartPackets != uartPackets;
+        oldDelegate.uartPackets != uartPackets ||
+        oldDelegate.i2cConfig != i2cConfig ||
+        oldDelegate.i2cPackets != i2cPackets ||
+        oldDelegate.spiConfig != spiConfig ||
+        oldDelegate.spiPackets != spiPackets ||
+        oldDelegate.pwmConfig != pwmConfig ||
+        oldDelegate.pwmMeasurement != pwmMeasurement;
   }
 }
+

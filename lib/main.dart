@@ -215,6 +215,8 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                     case 'mixed':
                     case 'uart':
                     case 'i2c':
+                    case 'spi':
+                    case 'pwm':
                     case 'motor':
                       _engine.startContinuousDemo(scenario: value);
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -242,7 +244,9 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                   ),
                   _buildDemoMenuItem('mixed', Icons.hub, 'Tráfico Mixto (SPI/I2C/UART/PWM)', isContinuous && _engine.currentScenario == 'mixed'),
                   _buildDemoMenuItem('uart', Icons.chat_bubble_outline, 'UART 115200 (TX/RX + RTS/CTS)', isContinuous && _engine.currentScenario == 'uart'),
-                  _buildDemoMenuItem('i2c', Icons.memory, 'Sensor I2C con INT#', isContinuous && _engine.currentScenario == 'i2c'),
+                  _buildDemoMenuItem('i2c', Icons.memory, 'I2C 100kHz (Addr 0x48 + Data)', isContinuous && _engine.currentScenario == 'i2c'),
+                  _buildDemoMenuItem('spi', Icons.flash_on, 'SPI 200kHz (Flash JEDEC 0x9F)', isContinuous && _engine.currentScenario == 'spi'),
+                  _buildDemoMenuItem('pwm', Icons.speed, 'PWM 20kHz (Duty 75% + 1kHz Sine)', isContinuous && _engine.currentScenario == 'pwm'),
                   _buildDemoMenuItem('motor', Icons.rotate_right, 'Motor PWM 20kHz & Encoder', isContinuous && _engine.currentScenario == 'motor'),
                   const PopupMenuDivider(),
                   const PopupMenuItem<String>(
@@ -473,12 +477,39 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                     foregroundColor: Colors.black,
                   ),
                   icon: const Icon(Icons.terminal, size: 18),
-                  label: const Text('Demo Serial UART', style: TextStyle(fontWeight: FontWeight.bold)),
+                  label: const Text('Demo UART', style: TextStyle(fontWeight: FontWeight.bold)),
                   onPressed: () => _engine.startContinuousDemo(scenario: 'uart'),
                 ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFAB47BC),
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.sync_alt, size: 18),
+                  label: const Text('Demo I2C', style: TextStyle(fontWeight: FontWeight.bold)),
+                  onPressed: () => _engine.startContinuousDemo(scenario: 'i2c'),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF9100),
+                    foregroundColor: Colors.black,
+                  ),
+                  icon: const Icon(Icons.flash_on, size: 18),
+                  label: const Text('Demo SPI', style: TextStyle(fontWeight: FontWeight.bold)),
+                  onPressed: () => _engine.startContinuousDemo(scenario: 'spi'),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFD600),
+                    foregroundColor: Colors.black,
+                  ),
+                  icon: const Icon(Icons.speed, size: 18),
+                  label: const Text('Demo PWM', style: TextStyle(fontWeight: FontWeight.bold)),
+                  onPressed: () => _engine.startContinuousDemo(scenario: 'pwm'),
+                ),
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.play_circle_outline, color: Color(0xFFFFD600), size: 18),
-                  label: const Text('Señal Estática', style: TextStyle(color: Color(0xFFFFD600))),
+                  icon: const Icon(Icons.play_circle_outline, color: Colors.white70, size: 18),
+                  label: const Text('Estática', style: TextStyle(color: Colors.white70)),
                   onPressed: _generateStaticDemoSignal,
                 ),
               ],
